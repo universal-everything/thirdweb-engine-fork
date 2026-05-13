@@ -40,7 +40,15 @@ COPY . .
 # Install dependencies for both development and production (May need devDependencies to build)
 # Build the project
 # Prune dev dependencies from the packages
+#
+# `npx prisma generate` is invoked explicitly. @prisma/client's postinstall
+# script generates the typed client, but we've observed it intermittently
+# completing without writing the model types when run inside this image
+# under qemu-amd64 emulation — `yarn build` then fails with TS2305 on
+# every imported Prisma model. Running prisma generate as a separate
+# step makes the failure surface as a real error if it ever recurs.
 RUN yarn install --frozen-lockfile --production=false --network-timeout 1000000 && \
+    npx prisma generate && \
     yarn build && \
     yarn copy-files && \
     yarn install --frozen-lockfile --production=true --network-timeout 1000000
