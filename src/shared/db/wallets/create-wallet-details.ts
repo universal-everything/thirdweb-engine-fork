@@ -29,8 +29,9 @@ type CreateWalletDetailsParams = {
       gcpKmsKeyVersionId?: string; // deprecated and unused, todo: remove with next breaking change
       gcpKmsLocationId?: string; // deprecated and unused, todo: remove with next breaking change
 
-      gcpApplicationCredentialPrivateKey: string; // will be encrypted and stored, pass plaintext to this function
-      gcpApplicationCredentialEmail: string;
+      // Null when using Application Default Credentials (e.g. Cloud Run SA).
+      gcpApplicationCredentialPrivateKey: string | null; // will be encrypted and stored when present, pass plaintext to this function
+      gcpApplicationCredentialEmail: string | null;
     }
   | {
       type: "smart:aws-kms";
@@ -110,9 +111,11 @@ export const createWalletDetails = async ({
         ...walletDetails,
         address: walletDetails.address.toLowerCase(),
 
-        gcpApplicationCredentialPrivateKey: encrypt(
-          walletDetails.gcpApplicationCredentialPrivateKey,
-        ),
+        // Skip encryption when the privateKey is absent (ADC fallback).
+        gcpApplicationCredentialPrivateKey:
+          walletDetails.gcpApplicationCredentialPrivateKey
+            ? encrypt(walletDetails.gcpApplicationCredentialPrivateKey)
+            : null,
       },
     });
   }

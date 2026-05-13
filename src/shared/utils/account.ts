@@ -77,15 +77,26 @@ export const walletDetailsToAccount = async ({
       return { account };
     }
     case WalletType.gcpKms: {
+      // When the wallet was imported without static creds, drop clientOptions
+      // entirely so @google-cloud/kms falls back to Application Default
+      // Credentials (e.g. the Cloud Run runtime service account).
+      const hasStaticCreds =
+        !!walletDetails.gcpApplicationCredentialEmail &&
+        !!walletDetails.gcpApplicationCredentialPrivateKey;
+
       const account = await getGcpKmsAccount({
         client: thirdwebClient,
         name: walletDetails.gcpKmsResourcePath,
-        clientOptions: {
-          credentials: {
-            client_email: walletDetails.gcpApplicationCredentialEmail,
-            private_key: walletDetails.gcpApplicationCredentialPrivateKey,
-          },
-        },
+        clientOptions: hasStaticCreds
+          ? {
+              credentials: {
+                client_email:
+                  walletDetails.gcpApplicationCredentialEmail as string,
+                private_key:
+                  walletDetails.gcpApplicationCredentialPrivateKey as string,
+              },
+            }
+          : undefined,
       });
       return { account };
     }

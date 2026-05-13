@@ -18,8 +18,9 @@ const requestBodySchema = Type.Union([
     gcpApplicationProjectId: Type.String(),
     gcpKmsLocationId: Type.String(),
     gcpKmsKeyRingId: Type.String(),
-    gcpApplicationCredentialEmail: Type.String(),
-    gcpApplicationCredentialPrivateKey: Type.String(),
+    // Optional: omit both when relying on Application Default Credentials.
+    gcpApplicationCredentialEmail: Type.Optional(Type.String()),
+    gcpApplicationCredentialPrivateKey: Type.Optional(Type.String()),
   }),
   Type.Object({
     circleApiKey: Type.String(),
@@ -89,12 +90,27 @@ export async function updateWalletsConfiguration(fastify: FastifyInstance) {
         if (
           !req.body.gcpApplicationProjectId ||
           !req.body.gcpKmsLocationId ||
-          !req.body.gcpKmsKeyRingId ||
-          !req.body.gcpApplicationCredentialEmail ||
-          !req.body.gcpApplicationCredentialPrivateKey
+          !req.body.gcpKmsKeyRingId
         ) {
           throw createCustomError(
-            "Please specify all GCP KMS configuration.",
+            "Please specify gcpApplicationProjectId, gcpKmsLocationId, and gcpKmsKeyRingId.",
+            StatusCodes.BAD_REQUEST,
+            "BAD_REQUEST",
+          );
+        }
+
+        // Email + privateKey are optional. When both are absent, Engine
+        // signs via Application Default Credentials (e.g. the Cloud Run
+        // runtime service account). When provided, both must be set
+        // together so we don't half-configure a static credential.
+        const { gcpApplicationCredentialEmail, gcpApplicationCredentialPrivateKey } =
+          req.body;
+        if (
+          (gcpApplicationCredentialEmail && !gcpApplicationCredentialPrivateKey) ||
+          (!gcpApplicationCredentialEmail && gcpApplicationCredentialPrivateKey)
+        ) {
+          throw createCustomError(
+            "gcpApplicationCredentialEmail and gcpApplicationCredentialPrivateKey must be provided together (or both omitted to use Application Default Credentials).",
             StatusCodes.BAD_REQUEST,
             "BAD_REQUEST",
           );
@@ -104,9 +120,9 @@ export async function updateWalletsConfiguration(fastify: FastifyInstance) {
           gcpApplicationProjectId: req.body.gcpApplicationProjectId,
           gcpKmsLocationId: req.body.gcpKmsLocationId,
           gcpKmsKeyRingId: req.body.gcpKmsKeyRingId,
-          gcpApplicationCredentialEmail: req.body.gcpApplicationCredentialEmail,
+          gcpApplicationCredentialEmail: gcpApplicationCredentialEmail ?? null,
           gcpApplicationCredentialPrivateKey:
-            req.body.gcpApplicationCredentialPrivateKey,
+            gcpApplicationCredentialPrivateKey ?? null,
         });
       }
 

@@ -123,40 +123,45 @@ const toParsedConfig = async (config: Configuration): Promise<ParsedConfig> => {
   }
 
   let gcpWalletConfiguration: GcpWalletConfiguration | null = null;
-  // TODO: Remove backwards compatibility with next breaking change
-  if (gcpApplicationCredentialEmail && gcpApplicationCredentialPrivateKey) {
-    // First try to load the gcp secret using the encryption password
-    let decryptedGcpKey = decrypt(
-      gcpApplicationCredentialPrivateKey,
-      env.ENCRYPTION_PASSWORD,
-    );
-
-    // If that fails, try to load the gcp secret using the thirdweb api secret key
-    if (!gcpApplicationCredentialPrivateKey) {
-      decryptedGcpKey = decrypt(
-        gcpApplicationCredentialPrivateKey,
-        env.THIRDWEB_API_SECRET_KEY,
+  // GCP wallet config is now gated on the location/project/keyring trio.
+  // Email + privateKey are optional: when absent, signing falls back to
+  // Application Default Credentials (e.g. Cloud Run runtime SA).
+  if (gcpApplicationProjectId) {
+    if (!gcpKmsLocationId || !gcpKmsKeyRingId) {
+      throw new Error(
+        "GCP KMS location ID and key ring ID are required configuration for this wallet type",
       );
-
-      // If that succeeds, update the configuration with the encryption password instead
-      if (decryptedGcpKey) {
-        logger({
-          service: "worker",
-          level: "info",
-          message:
-            "[Encryption] Updating gcpApplicationCredentialPrivateKey to use ENCRYPTION_PASSWORD",
-        });
-
-        await updateConfiguration({
-          gcpApplicationCredentialPrivateKey: decryptedGcpKey,
-        });
-      }
     }
 
-    if (!gcpKmsLocationId || !gcpKmsKeyRingId || !gcpApplicationProjectId) {
-      throw new Error(
-        "GCP KMS location ID, project ID, and key ring ID are required configuration for this wallet type",
+    let decryptedGcpKey: string | null = null;
+    if (gcpApplicationCredentialPrivateKey) {
+      // First try to load the gcp secret using the encryption password
+      decryptedGcpKey = decrypt(
+        gcpApplicationCredentialPrivateKey,
+        env.ENCRYPTION_PASSWORD,
       );
+
+      // If that fails, try to load the gcp secret using the thirdweb api secret key
+      if (!decryptedGcpKey) {
+        decryptedGcpKey = decrypt(
+          gcpApplicationCredentialPrivateKey,
+          env.THIRDWEB_API_SECRET_KEY,
+        );
+
+        // If that succeeds, update the configuration with the encryption password instead
+        if (decryptedGcpKey) {
+          logger({
+            service: "worker",
+            level: "info",
+            message:
+              "[Encryption] Updating gcpApplicationCredentialPrivateKey to use ENCRYPTION_PASSWORD",
+          });
+
+          await updateConfiguration({
+            gcpApplicationCredentialPrivateKey: decryptedGcpKey,
+          });
+        }
+      }
     }
 
     gcpWalletConfiguration = {

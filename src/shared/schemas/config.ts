@@ -10,8 +10,10 @@ export type AwsWalletConfiguration = {
 };
 
 export type GcpWalletConfiguration = {
-  gcpApplicationCredentialEmail: string;
-  gcpApplicationCredentialPrivateKey: string;
+  // Null when running with Application Default Credentials (ADC) — e.g.
+  // Cloud Run with the runtime service account bound to roles/cloudkms.signer.
+  gcpApplicationCredentialEmail: string | null;
+  gcpApplicationCredentialPrivateKey: string | null;
 
   // these values are used as default so users don't need to specify them every time to the create wallet endpoint
   // for fetching a wallet, always trust the resource path in the wallet details

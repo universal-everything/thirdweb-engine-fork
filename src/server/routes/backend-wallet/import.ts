@@ -179,20 +179,16 @@ export const importBackendWallet = async (fastify: FastifyInstance) => {
       if ("gcpKmsKeyId" in body && !walletAddress) {
         const { gcpKmsKeyId, gcpKmsKeyVersionId, credentials, label } = body;
 
+        // Email + privateKey are optional. When omitted (and not in config),
+        // signing falls back to Application Default Credentials.
         const email =
           credentials?.email ??
-          config.walletConfiguration.gcp?.gcpApplicationCredentialEmail;
+          config.walletConfiguration.gcp?.gcpApplicationCredentialEmail ??
+          null;
         const privateKey =
           credentials?.privateKey ??
-          config.walletConfiguration.gcp?.gcpApplicationCredentialPrivateKey;
-
-        if (!(email && privateKey)) {
-          throw createCustomError(
-            `Please provide 'email' and 'privateKey' to import a wallet. Can be provided as configuration or as credential with the request.`,
-            StatusCodes.BAD_REQUEST,
-            "MISSING_PARAMETERS",
-          );
-        }
+          config.walletConfiguration.gcp?.gcpApplicationCredentialPrivateKey ??
+          null;
 
         // TODO: with next breaking change, only require GCP KMS resource path
         // import endpoint does not currently have resource path in the request body
