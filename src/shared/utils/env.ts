@@ -62,6 +62,11 @@ export const env = createEnv({
     ENGINE_MODE: z
       .enum(["default", "sandbox", "server_only", "worker_only"])
       .default("default"),
+    // When true, Engine skips its app-level (SIWE-minted JWT) auth check
+    // and trusts the caller. Use only when the network is otherwise
+    // strongly authenticated (e.g. Cloud Run IAM + INGRESS_INTERNAL_ONLY).
+    // Independent from ENGINE_MODE — sandbox also implies read-only.
+    ENGINE_TRUST_NETWORK: boolEnvSchema(false),
     GLOBAL_RATE_LIMIT_PER_MIN: z.coerce.number().default(400 * 60),
     ACCOUNT_CACHE_SIZE: z.coerce.number().default(2048),
     DD_TRACER_ACTIVATED: boolEnvSchema(false),
@@ -149,6 +154,7 @@ export const env = createEnv({
     CONFIRM_TRANSACTION_QUEUE_CONCURRENCY:
       process.env.CONFIRM_TRANSACTION_QUEUE_CONCURRENCY,
     ENGINE_MODE: process.env.ENGINE_MODE,
+    ENGINE_TRUST_NETWORK: process.env.ENGINE_TRUST_NETWORK,
     REDIS_MAXMEMORY: process.env.REDIS_MAXMEMORY,
     TRANSACTION_HISTORY_COUNT: process.env.TRANSACTION_HISTORY_COUNT,
     GLOBAL_RATE_LIMIT_PER_MIN: process.env.GLOBAL_RATE_LIMIT_PER_MIN,

@@ -108,8 +108,10 @@ export async function withAuth(server: FastifyInstance) {
   // Note: in the onRequest hook, request.body will always be undefined, because the body parsing happens before the preValidation hook.
   // https://fastify.dev/docs/latest/Reference/Hooks/#onrequest
   server.addHook("preValidation", async (req, res) => {
-    // Skip auth check in sandbox mode
-    if (env.ENGINE_MODE === "sandbox") {
+    // Skip auth check when the network is trusted (Cloud Run IAM +
+    // INGRESS_INTERNAL_ONLY in our case). Independent from
+    // ENGINE_MODE=sandbox, which also makes Engine read-only.
+    if (env.ENGINE_TRUST_NETWORK) {
       return;
     }
     let message =
