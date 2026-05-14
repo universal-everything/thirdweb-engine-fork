@@ -78,8 +78,11 @@ const gcpKmsWalletSchema = z
   .object({
     type: z.literal("gcp-kms"),
     gcpKmsResourcePath: z.string(),
-    gcpApplicationCredentialPrivateKey: z.string(),
-    gcpApplicationCredentialEmail: z.string(),
+    // Nullable when the wallet was imported under ADC mode. Consumers
+    // (account.ts) drop clientOptions entirely when these are null so
+    // the KMS client auto-discovers Application Default Credentials.
+    gcpApplicationCredentialPrivateKey: z.string().nullable(),
+    gcpApplicationCredentialEmail: z.string().nullable(),
   })
   .merge(baseWalletPartialSchema);
 
