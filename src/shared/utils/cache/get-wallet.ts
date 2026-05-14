@@ -81,9 +81,10 @@ export const getWallet = async <TWallet extends EVMWallet>({
         locationId: splitResourcePath.locationId,
         projectId: splitResourcePath.projectId,
 
-        applicationCredentialEmail: walletDetails.gcpApplicationCredentialEmail,
+        applicationCredentialEmail:
+          walletDetails.gcpApplicationCredentialEmail ?? undefined,
         applicationCredentialPrivateKey:
-          walletDetails.gcpApplicationCredentialPrivateKey,
+          walletDetails.gcpApplicationCredentialPrivateKey ?? undefined,
       });
       break;
     }
@@ -135,9 +136,10 @@ export const getWallet = async <TWallet extends EVMWallet>({
         locationId: splitResourcePath.locationId,
         projectId: splitResourcePath.projectId,
 
-        applicationCredentialEmail: walletDetails.gcpApplicationCredentialEmail,
+        applicationCredentialEmail:
+          walletDetails.gcpApplicationCredentialEmail ?? undefined,
         applicationCredentialPrivateKey:
-          walletDetails.gcpApplicationCredentialPrivateKey,
+          walletDetails.gcpApplicationCredentialPrivateKey ?? undefined,
       });
 
       const smartWallet: EVMWallet = await getSmartWallet({

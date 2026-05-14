@@ -132,13 +132,19 @@ export const walletDetailsToAccount = async ({
     }
 
     case WalletType.smartGcpKms: {
+      // smart:gcp-kms isn't exercised in our deployment, but the type
+      // must compile. Null is coerced to undefined at the boundary;
+      // if the runtime ever hits this with null creds it'll fail, and
+      // we'd need to mirror the gcpKms case's ADC fallback here.
       const adminAccount = await getGcpKmsAccount({
         client: thirdwebClient,
         name: walletDetails.gcpKmsResourcePath,
         clientOptions: {
           credentials: {
-            client_email: walletDetails.gcpApplicationCredentialEmail,
-            private_key: walletDetails.gcpApplicationCredentialPrivateKey,
+            client_email:
+              walletDetails.gcpApplicationCredentialEmail ?? undefined,
+            private_key:
+              walletDetails.gcpApplicationCredentialPrivateKey ?? undefined,
           },
         },
       });
