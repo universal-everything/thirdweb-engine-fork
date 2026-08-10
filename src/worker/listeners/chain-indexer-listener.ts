@@ -18,16 +18,30 @@ export const chainIndexerListener = async (): Promise<void> => {
   }
 
   task = new CronJob(config.indexerListenerCronSchedule, async () => {
-    if (!processChainIndexerStarted) {
-      processChainIndexerStarted = true;
-      await manageChainIndexers();
-      processChainIndexerStarted = false;
-    } else {
+    if (processChainIndexerStarted) {
       logger({
         service: "worker",
         level: "warn",
         message: "manageChainIndexers already running, skipping",
       });
+      return;
+    }
+    processChainIndexerStarted = true;
+    try {
+      await manageChainIndexers();
+    } catch (error) {
+      // Previously a throw here left processChainIndexerStarted latched `true`
+      // forever: every later tick hit the "already running" branch, so contract
+      // indexing silently stopped and the warn log spammed (~52k lines/day).
+      // Surface the real error and always release the flag in `finally`.
+      logger({
+        service: "worker",
+        level: "error",
+        message: "manageChainIndexers failed; will retry next tick",
+        error,
+      });
+    } finally {
+      processChainIndexerStarted = false;
     }
   });
   task.start();
