@@ -9,15 +9,16 @@ import { logger } from "../../shared/utils/logger";
 import { redis } from "../../shared/utils/redis/redis";
 import { NonceHealthCheckQueue } from "../queues/nonce-health-check-queue";
 import { logWorkerExceptions } from "../queues/queues";
+import {
+  NONCE_HEALTH_CHECK_FREQUENCY_SECONDS,
+  nonceHealthCheckCronPattern,
+} from "./nonce-health-check-cron";
 
 // Configuration
 
 // Number of consecutive periods to check
 // Checking over multiple periods avoids false positives due to intermittent stale RPC responses.
 const CHECK_PERIODS = 5;
-
-// Frequency of the worker
-const RUN_FREQUENCY_SECONDS = 60; // Run every minute
 
 // The number of wallets to check in parallel.
 const BATCH_SIZE = 500;
@@ -30,7 +31,11 @@ interface NonceState {
 // Initialize the worker
 export const initNonceHealthCheckWorker = () => {
   NonceHealthCheckQueue.q.add("cron", "", {
-    repeat: { pattern: `*/${RUN_FREQUENCY_SECONDS} * * * * *` },
+    repeat: {
+      pattern: nonceHealthCheckCronPattern(
+        NONCE_HEALTH_CHECK_FREQUENCY_SECONDS,
+      ),
+    },
     jobId: "nonce-health-check-cron",
   });
 
