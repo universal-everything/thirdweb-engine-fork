@@ -10,6 +10,10 @@ import type {
   ParsedConfig,
 } from "../../schemas/config";
 import { WalletType } from "../../schemas/wallet";
+import {
+  DEFAULT_INDEXER_LISTENER_CRON,
+  DEFAULT_MINED_TX_LISTENER_CRON,
+} from "./default-cron-schedules";
 import { mandatoryAllowedCorsUrls } from "../../../server/utils/cors-urls";
 import type { networkResponseSchema } from "../../utils/cache/get-sdk";
 import { decrypt } from "../../utils/crypto";
@@ -250,10 +254,10 @@ export const getConfiguration = async (): Promise<ParsedConfig> => {
       create: {
         minTxsToProcess: 1,
         maxTxsToProcess: 30,
-        minedTxListenerCronSchedule: "*/5 * * * * *",
+        minedTxListenerCronSchedule: DEFAULT_MINED_TX_LISTENER_CRON,
         maxTxsToUpdate: 50,
         retryTxListenerCronSchedule: "*/15 * * * * *",
-        indexerListenerCronSchedule: "*/5 * * * * *",
+        indexerListenerCronSchedule: DEFAULT_INDEXER_LISTENER_CRON,
         maxBlocksToIndex: 25,
         cursorDelaySeconds: 2,
         minEllapsedBlocksBeforeRetry: 12,
@@ -284,7 +288,7 @@ export const getConfiguration = async (): Promise<ParsedConfig> => {
     });
   } else if (!config.indexerListenerCronSchedule) {
     config = await updateConfiguration({
-      indexerListenerCronSchedule: "*/5 * * * * *",
+      indexerListenerCronSchedule: DEFAULT_INDEXER_LISTENER_CRON,
     });
   }
 
