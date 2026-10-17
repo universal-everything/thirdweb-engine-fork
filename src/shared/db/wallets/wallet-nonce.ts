@@ -97,6 +97,25 @@ export const acquiredNoncesKey = (chainId: number, walletAddress: Address) =>
 /** An acquired-but-unsent nonce older than this is treated as abandoned. */
 export const ACQUIRED_NONCE_GRACE_MS = 5 * 60 * 1000;
 
+/**
+ * PATCH (DEV-16631): pop the lowest recycled nonce, else INCR the last-used
+ * counter, and record it in the acquired set — atomically.
+ * KEYS: recycled, lastUsed, acquired. ARGV: now (ms). Returns {nonce, recycled 0|1}.
+ */
+const ACQUIRE_NONCE_SCRIPT = `
+local popped = redis.call('ZPOPMIN', KEYS[1])
+local nonce
+local recycled = 0
+if #popped > 0 then
+  nonce = tonumber(popped[1])
+  recycled = 1
+else
+  nonce = redis.call('INCR', KEYS[2])
+end
+redis.call('ZADD', KEYS[3], ARGV[1], nonce)
+return {nonce, recycled}
+`;
+
 export const splitSentNoncesKey = (key: string) => {
   const _splittedKeys = key.split(":");
   const walletAddress = normalizeAddress(_splittedKeys[2]);
@@ -156,34 +175,28 @@ export const acquireNonce = async (args: {
 }): Promise<{ nonce: number; isRecycledNonce: boolean }> => {
   const { queueId, chainId, walletAddress } = args;
 
-  let isRecycledNonce = false;
-
-  // Try to acquire the lowest recycled nonce first
-  let nonce = await _acquireRecycledNonce(chainId, walletAddress);
-  if (nonce !== null) {
-    isRecycledNonce = true;
-  } else {
-    // Else increment the last used nonce.
-    //
-    // PATCH (universal-relayer DEV-16631): initialise an unset counter from the
-    // chain BEFORE incrementing, atomically (SET NX). Upstream used
-    // "INCR returned 1 ⇒ unset ⇒ sync from chain ⇒ INCR again", which races on
-    // a wallet's first use on a chain: a concurrent INCR returns 2, skips the
-    // sync, and nonce 1 is never issued — every later send fails "nonce too
-    // high" (prod, 2026-10-16, Arbitrum).
-    const key = lastUsedNonceKey(chainId, walletAddress);
-    if (!(await redis.exists(key))) {
-      await initLatestNonceFromOnchainIfUnset(chainId, walletAddress);
-    }
-    nonce = await redis.incr(key);
+  // PATCH (universal-relayer DEV-16631): initialise an unset counter from the
+  // chain BEFORE incrementing, atomically (SET NX). Upstream used
+  // "INCR returned 1 ⇒ unset ⇒ sync from chain ⇒ INCR again", which races on
+  // a wallet's first use on a chain: a concurrent INCR returns 2, skips the
+  // sync, and nonce 1 is never issued — every later send fails "nonce too
+  // high" (prod, 2026-10-16, Arbitrum).
+  const lastUsedKey = lastUsedNonceKey(chainId, walletAddress);
+  if (!(await redis.exists(lastUsedKey))) {
+    await initLatestNonceFromOnchainIfUnset(chainId, walletAddress);
   }
 
-  // PATCH (DEV-16631): mark it held until it is sent or recycled.
-  await redis.zadd(
+  // Lowest recycled nonce first, else the next one — and mark it held, in ONE
+  // atomic script so a concurrent gap heal can't see it issued-but-unmarked.
+  const [nonce, recycledFlag] = (await redis.eval(
+    ACQUIRE_NONCE_SCRIPT,
+    3,
+    recycledNoncesKey(chainId, walletAddress),
+    lastUsedKey,
     acquiredNoncesKey(chainId, walletAddress),
     Date.now(),
-    nonce.toString(),
-  );
+  )) as [number, number];
+  const isRecycledNonce = recycledFlag === 1;
 
   await updateNonceMap({
     chainId,
@@ -219,24 +232,6 @@ export const recycleNonce = async (
   await redis.zadd(key, nonce, nonce.toString());
   // PATCH (DEV-16631): recycled ⇒ no longer held by its job.
   await redis.zrem(acquiredNoncesKey(chainId, walletAddress), nonce.toString());
-};
-
-/**
- * Acquires the lowest recycled nonce that is unused.
- * @param chainId
- * @param walletAddress
- * @returns
- */
-const _acquireRecycledNonce = async (
-  chainId: number,
-  walletAddress: Address,
-): Promise<number | null> => {
-  const key = recycledNoncesKey(chainId, walletAddress);
-  const result = await redis.zpopmin(key);
-  if (result.length === 0) {
-    return null;
-  }
-  return Number.parseInt(result[0]);
 };
 
 /**
@@ -281,6 +276,12 @@ export const recycleNonceGaps = async (
 
   const heldSince = now - ACQUIRED_NONCE_GRACE_MS;
   const acquiredKey = acquiredNoncesKey(chainId, walletAddress);
+  // Marks for nonces the chain already used are settled — drop them (e.g. an
+  // "already used" send error re-syncs without clearing its mark).
+  const settled = (await redis.zrange(acquiredKey, 0, -1)).filter(
+    (n) => Number(n) <= lastUsedNonceOnchain,
+  );
+  if (settled.length > 0) await redis.zrem(acquiredKey, ...settled);
   const recycled: number[] = [];
   for (
     let nonce = lastUsedNonceOnchain + 1;

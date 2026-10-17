@@ -224,4 +224,25 @@ describe("gap healing never recycles a nonce another job holds (DEV-16631)", () 
       await testRedis.zrange(acquiredNoncesKey(CHAIN, WALLET), 0, -1),
     ).toEqual([]);
   });
+
+  it("prunes held marks for nonces the chain already used", async () => {
+    onchain.count = 0;
+    await Promise.all([0, 1, 2].map(acquire));
+    onchain.count = 2; // 0 and 1 landed (e.g. via an "already used" re-sync)
+    await recycleNonceGaps(CHAIN, WALLET);
+    expect(
+      await testRedis.zrange(acquiredNoncesKey(CHAIN, WALLET), 0, -1),
+    ).toEqual(["2"]);
+  });
+
+  it("a recycled nonce is re-issued first and marked held again", async () => {
+    onchain.count = 0;
+    await Promise.all([0, 1, 2].map(acquire));
+    await recycleNonce(CHAIN, WALLET, 1);
+    const again = await acquire(9);
+    expect(again).toEqual({ nonce: 1, isRecycledNonce: true });
+    expect(
+      await testRedis.zscore(acquiredNoncesKey(CHAIN, WALLET), "1"),
+    ).not.toBeNull();
+  });
 });
