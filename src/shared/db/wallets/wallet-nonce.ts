@@ -102,6 +102,15 @@ export const ACQUIRED_NONCE_GRACE_MS = 5 * 60 * 1000;
  * counter, and record it in the acquired set — atomically.
  * KEYS: recycled, lastUsed, acquired. ARGV: now (ms). Returns {nonce, recycled 0|1}.
  */
+/** PATCH (DEV-16631): SET KEYS[1] = ARGV[1] only if it is unset or lower. */
+const RAISE_COUNTER_SCRIPT = `
+local current = tonumber(redis.call('GET', KEYS[1]) or '-1')
+if current < tonumber(ARGV[1]) then
+  redis.call('SET', KEYS[1], ARGV[1])
+end
+return 1
+`;
+
 const ACQUIRE_NONCE_SCRIPT = `
 local popped = redis.call('ZPOPMIN', KEYS[1])
 local nonce
@@ -265,6 +274,8 @@ export const recycleNonceGaps = async (
   chainId: number,
   walletAddress: Address,
   now: number = Date.now(),
+  /** The nonce the RPC just rejected as too high, if any. */
+  failedNonce?: number,
 ): Promise<{
   lastUsedNonceOnchain: number;
   lastUsedNonceDb: number;
@@ -273,6 +284,40 @@ export const recycleNonceGaps = async (
   const lastUsedNonceOnchain =
     (await _onchainTransactionCount(chainId, walletAddress)) - 1;
   const lastUsedNonceDb = await inspectNonce(chainId, walletAddress);
+  // The highest nonce this wallet has handed out may sit ABOVE the counter: a
+  // recycled nonce (popped before any INCR) or the one that just failed. Prod
+  // 2026-10-17: counter 0, recycled {2}, chain at 1 → scanning only up to the
+  // counter found nothing and nonce 2 was retried forever.
+  const [maxRecycled] = await redis.zrange(
+    recycledNoncesKey(chainId, walletAddress),
+    -1,
+    -1,
+  );
+  const upTo = Math.max(
+    lastUsedNonceOnchain,
+    lastUsedNonceDb,
+    maxRecycled === undefined ? -1 : Number(maxRecycled),
+    failedNonce ?? -1,
+  );
+
+  // Raise the counter FIRST (never lower; Lua, atomic) so a concurrent INCR
+  // can't land on a nonce this heal is about to recycle, and so it never
+  // trails what was handed out (a later INCR re-issuing a recycled nonce).
+  if (upTo > lastUsedNonceDb) {
+    await redis.eval(
+      RAISE_COUNTER_SCRIPT,
+      1,
+      lastUsedNonceKey(chainId, walletAddress),
+      upTo,
+    );
+  }
+  // Recycled nonces the chain already used can only fail "nonce too low".
+  // The recycled zset is scored by nonce.
+  await redis.zremrangebyscore(
+    recycledNoncesKey(chainId, walletAddress),
+    "-inf",
+    lastUsedNonceOnchain,
+  );
 
   const heldSince = now - ACQUIRED_NONCE_GRACE_MS;
   const acquiredKey = acquiredNoncesKey(chainId, walletAddress);
@@ -283,11 +328,7 @@ export const recycleNonceGaps = async (
   );
   if (settled.length > 0) await redis.zrem(acquiredKey, ...settled);
   const recycled: number[] = [];
-  for (
-    let nonce = lastUsedNonceOnchain + 1;
-    nonce <= lastUsedNonceDb;
-    nonce++
-  ) {
+  for (let nonce = lastUsedNonceOnchain + 1; nonce <= upTo; nonce++) {
     if (await isSentNonce(chainId, walletAddress, nonce)) continue;
     // "nonce too high" also fires when tx N+1 reaches the node before tx N —
     // normal with concurrent sends. N is then acquired, not missing.
