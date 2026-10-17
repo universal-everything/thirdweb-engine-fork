@@ -1,17 +1,12 @@
 import { Worker, type Job, type Processor } from "bullmq";
-import { eth_getTransactionCount, getRpcClient } from "thirdweb";
 import {
-  inspectNonce,
-  isSentNonce,
-  recycleNonce,
+  recycleNonceGaps,
   splitSentNoncesKey,
 } from "../../shared/db/wallets/wallet-nonce";
 import { getConfig } from "../../shared/utils/cache/get-config";
-import { getChain } from "../../shared/utils/chain";
 import { prettifyError } from "../../shared/utils/error";
 import { logger } from "../../shared/utils/logger";
 import { redis } from "../../shared/utils/redis/redis";
-import { thirdwebClient } from "../../shared/utils/sdk";
 import { NonceResyncQueue } from "../queues/nonce-resync-queue";
 import { logWorkerExceptions } from "../queues/queues";
 
@@ -50,30 +45,10 @@ const handler: Processor<string, void, string> = async (job: Job<string>) => {
     try {
       const { chainId, walletAddress } = splitSentNoncesKey(sentNonceKey);
 
-      const rpcRequest = getRpcClient({
-        client: thirdwebClient,
-        chain: await getChain(chainId),
-      });
-      const lastUsedNonceOnchain =
-        (await eth_getTransactionCount(rpcRequest, {
-          address: walletAddress,
-          blockTag: "latest",
-        })) - 1;
-      const lastUsedNonceDb = await inspectNonce(chainId, walletAddress);
-
       // Recycle all nonces between (onchain nonce, db nonce] if they aren't in-flight ("sent nonce").
-      const recycled: number[] = [];
-      for (
-        let nonce = lastUsedNonceOnchain + 1;
-        nonce <= lastUsedNonceDb;
-        nonce++
-      ) {
-        const exists = await isSentNonce(chainId, walletAddress, nonce);
-        if (!exists) {
-          await recycleNonce(chainId, walletAddress, nonce);
-          recycled.push(nonce);
-        }
-      }
+      // PATCH (DEV-16631): shared with the send worker's "nonce too high" path.
+      const { lastUsedNonceOnchain, lastUsedNonceDb, recycled } =
+        await recycleNonceGaps(chainId, walletAddress);
 
       const message = `wallet=${chainId}:${walletAddress} lastUsedNonceOnchain=${lastUsedNonceOnchain} lastUsedNonceDb=${lastUsedNonceDb} numRecycled=${recycled.length} (min=${recycled.at(0) ?? "N/A"} max=${recycled.at(-1) ?? "N/A"})`;
       job.log(message);
