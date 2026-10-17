@@ -150,15 +150,18 @@ export const acquireNonce = async (args: {
     isRecycledNonce = true;
   } else {
     // Else increment the last used nonce.
+    //
+    // PATCH (universal-relayer DEV-16631): initialise an unset counter from the
+    // chain BEFORE incrementing, atomically (SET NX). Upstream used
+    // "INCR returned 1 ⇒ unset ⇒ sync from chain ⇒ INCR again", which races on
+    // a wallet's first use on a chain: a concurrent INCR returns 2, skips the
+    // sync, and nonce 1 is never issued — every later send fails "nonce too
+    // high" (prod, 2026-10-16, Arbitrum).
     const key = lastUsedNonceKey(chainId, walletAddress);
-    nonce = await redis.incr(key);
-    if (nonce === 1) {
-      // If INCR returned 1, the nonce was not set.
-      // This may be a newly imported wallet.
-      // Sync the onchain value and increment again.
-      await syncLatestNonceFromOnchain(chainId, walletAddress);
-      nonce = await redis.incr(key);
+    if (!(await redis.exists(key))) {
+      await initLatestNonceFromOnchainIfUnset(chainId, walletAddress);
     }
+    nonce = await redis.incr(key);
   }
 
   await updateNonceMap({
@@ -211,6 +214,72 @@ const _acquireRecycledNonce = async (
     return null;
   }
   return Number.parseInt(result[0]);
+};
+
+/**
+ * PATCH (DEV-16631): set the last-used nonce from the chain only if no other
+ * caller set it first (SET NX). Concurrent first uses all read the same
+ * transaction count; one write wins and every INCR after it is contiguous.
+ */
+export const initLatestNonceFromOnchainIfUnset = async (
+  chainId: number,
+  walletAddress: Address,
+) => {
+  const transactionCount = await _onchainTransactionCount(
+    chainId,
+    walletAddress,
+  );
+  const key = lastUsedNonceKey(chainId, walletAddress);
+  await redis.set(key, transactionCount - 1, "NX");
+};
+
+/**
+ * PATCH (DEV-16631): recycle every nonce between the last one used onchain and
+ * the last one issued here that is not in flight ("sent"), so the next
+ * `acquireNonce` fills the gap. What the upstream `nonceResyncWorker` does —
+ * but that worker only visits wallets with an in-flight tx, and a wallet whose
+ * sends all fail pre-broadcast ("nonce too high") has none, so it never healed.
+ * Callable per wallet: the send worker runs it on "nonce too high".
+ */
+export const recycleNonceGaps = async (
+  chainId: number,
+  walletAddress: Address,
+): Promise<{
+  lastUsedNonceOnchain: number;
+  lastUsedNonceDb: number;
+  recycled: number[];
+}> => {
+  const lastUsedNonceOnchain =
+    (await _onchainTransactionCount(chainId, walletAddress)) - 1;
+  const lastUsedNonceDb = await inspectNonce(chainId, walletAddress);
+
+  const recycled: number[] = [];
+  for (
+    let nonce = lastUsedNonceOnchain + 1;
+    nonce <= lastUsedNonceDb;
+    nonce++
+  ) {
+    if (!(await isSentNonce(chainId, walletAddress, nonce))) {
+      await recycleNonce(chainId, walletAddress, nonce);
+      recycled.push(nonce);
+    }
+  }
+  return { lastUsedNonceOnchain, lastUsedNonceDb, recycled };
+};
+
+const _onchainTransactionCount = async (
+  chainId: number,
+  walletAddress: Address,
+) => {
+  const rpcRequest = getRpcClient({
+    client: thirdwebClient,
+    chain: await getChain(chainId),
+  });
+  // The next unused nonce = transactionCount.
+  return eth_getTransactionCount(rpcRequest, {
+    address: walletAddress,
+    blockTag: "latest",
+  });
 };
 
 /**

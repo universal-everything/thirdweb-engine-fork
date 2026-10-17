@@ -19,11 +19,25 @@ export const isNonceAlreadyUsedError = (error: unknown) => {
 
   if (message) {
     return (
-      message.includes("nonce too low") || message.includes("already known") || message.includes("incorrect account sequence")
+      message.includes("nonce too low") ||
+      message.includes("already known") ||
+      message.includes("incorrect account sequence")
     );
   }
 
   return isEthersErrorCode(error, ethers.errors.NONCE_EXPIRED);
+};
+
+/**
+ * PATCH (DEV-16631): the RPC rejected the tx because an earlier nonce was never
+ * sent — a gap. Geth/Nitro: "nonce too high".
+ */
+export const isNonceTooHighError = (error: unknown) => {
+  const message = _parseMessage(error);
+  if (message) {
+    return message.includes("nonce too high");
+  }
+  return false;
 };
 
 export const isReplacementGasFeeTooLow = (error: unknown) => {

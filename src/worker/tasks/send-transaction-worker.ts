@@ -26,8 +26,6 @@ import { TransactionDB } from "../../shared/db/transactions/db";
 import {
   acquireNonce,
   addSentNonce,
-  recycleNonce,
-  syncLatestNonceFromOnchainIfHigher,
 } from "../../shared/db/wallets/wallet-nonce";
 import {
   getAccount,
@@ -58,6 +56,7 @@ import { enqueueTransactionWebhook } from "../../shared/utils/transaction/webhoo
 import { reportUsage } from "../../shared/utils/usage";
 import { MineTransactionQueue } from "../queues/mine-transaction-queue";
 import { logWorkerExceptions } from "../queues/queues";
+import { _reconcileNonceAfterSendError } from "./send-error-nonce";
 import {
   type SendTransactionData,
   SendTransactionQueue,
@@ -296,12 +295,12 @@ const _sendUserOp = async (
   } catch (error) {
     const errorMessage = wrapError(error, "Bundler").message;
     job.log(`Failed to populate transaction: ${errorMessage}`);
-    
+
     // If retry is enabled for prepareUserOp errors, throw to trigger job retry
     if (env.EXPERIMENTAL__RETRY_PREPARE_USEROP_ERRORS) {
       throw error;
     }
-    
+
     // Otherwise, return errored transaction as before
     const erroredTransaction: ErroredTransaction = {
       ...queuedTransaction,
@@ -364,12 +363,12 @@ const _sendUserOp = async (
       wrapError(error, "Bundler").message
     } Failed to sign prepared userop`;
     job.log(`Failed to sign userop: ${errorMessage}`);
-    
+
     // If retry is enabled for prepareUserOp errors, throw to trigger job retry
     if (env.EXPERIMENTAL__RETRY_PREPARE_USEROP_ERRORS) {
       throw error;
     }
-    
+
     // Otherwise, return errored transaction as before
     const erroredTransaction: ErroredTransaction = {
       ...queuedTransaction,
@@ -398,12 +397,12 @@ const _sendUserOp = async (
       wrapError(error, "Bundler").message
     } Failed to bundle userop`;
     job.log(`Failed to bundle userop: ${errorMessage}`);
-    
+
     // If retry is enabled for prepareUserOp errors, throw to trigger job retry
     if (env.EXPERIMENTAL__RETRY_PREPARE_USEROP_ERRORS) {
       throw error;
     }
-    
+
     // Otherwise, return errored transaction as before
     const erroredTransaction: ErroredTransaction = {
       ...queuedTransaction,
@@ -568,21 +567,18 @@ const _sendTransaction = async (
   // This call throws if the RPC rejects the transaction.
   let transactionHash: Hex;
   try {
-    const sendTransactionResult = await account.sendTransaction(
-      populatedTransaction,
-    );
+    const sendTransactionResult =
+      await account.sendTransaction(populatedTransaction);
     transactionHash = sendTransactionResult.transactionHash;
   } catch (error: unknown) {
-    // If the nonce is already seen onchain (nonce too low) or in mempool (replacement underpriced),
-    // correct the DB nonce.
-    if (isNonceAlreadyUsedError(error) || isReplacementGasFeeTooLow(error)) {
-      const result = await syncLatestNonceFromOnchainIfHigher(chainId, from);
-      job.log(`Re-synced nonce: ${result}`);
-    } else {
-      // Otherwise this nonce is not used yet. Recycle it to be used by a future transaction.
-      job.log(`Recycling nonce: ${nonce}`);
-      await recycleNonce(chainId, from, nonce);
-    }
+    await _reconcileNonceAfterSendError({
+      job,
+      error,
+      chainId,
+      from,
+      nonce,
+      queueId,
+    });
 
     // Do not retry errors that are expected to be rejected by RPC again.
     if (isInsufficientFundsError(error)) {
