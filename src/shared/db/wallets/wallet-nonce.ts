@@ -294,9 +294,29 @@ export const recycleNonceGaps = async (
     -1,
   );
   const upTo = Math.max(
+    lastUsedNonceOnchain,
     lastUsedNonceDb,
     maxRecycled === undefined ? -1 : Number(maxRecycled),
     failedNonce ?? -1,
+  );
+
+  // Raise the counter FIRST (never lower; Lua, atomic) so a concurrent INCR
+  // can't land on a nonce this heal is about to recycle, and so it never
+  // trails what was handed out (a later INCR re-issuing a recycled nonce).
+  if (upTo > lastUsedNonceDb) {
+    await redis.eval(
+      RAISE_COUNTER_SCRIPT,
+      1,
+      lastUsedNonceKey(chainId, walletAddress),
+      upTo,
+    );
+  }
+  // Recycled nonces the chain already used can only fail "nonce too low".
+  // The recycled zset is scored by nonce.
+  await redis.zremrangebyscore(
+    recycledNoncesKey(chainId, walletAddress),
+    "-inf",
+    lastUsedNonceOnchain,
   );
 
   const heldSince = now - ACQUIRED_NONCE_GRACE_MS;
@@ -316,16 +336,6 @@ export const recycleNonceGaps = async (
     if (acquiredAt !== null && Number(acquiredAt) > heldSince) continue;
     await recycleNonce(chainId, walletAddress, nonce);
     recycled.push(nonce);
-  }
-  // Never let the counter trail what was handed out: the next INCR would
-  // re-issue a recycled nonce ("nonce too low"). Raise only, atomically.
-  if (upTo > lastUsedNonceDb) {
-    await redis.eval(
-      RAISE_COUNTER_SCRIPT,
-      1,
-      lastUsedNonceKey(chainId, walletAddress),
-      upTo,
-    );
   }
   return { lastUsedNonceOnchain, lastUsedNonceDb, recycled };
 };

@@ -281,4 +281,16 @@ describe("gap healing when the handed-out nonce sits above the counter (DEV-1663
     await recycleNonceGaps(CHAIN, WALLET, Date.now(), 2);
     expect(await testRedis.get(lastUsedNonceKey(CHAIN, WALLET))).toBe("9");
   });
+
+  it("stale recycled nonces the chain already used are dropped; the counter never goes below the chain", async () => {
+    onchain.count = 3; // chain used 0..2
+    // No counter at all, and a stale recycled 0 left behind.
+    await recycleNonce(CHAIN, WALLET, 0);
+    await recycleNonceGaps(CHAIN, WALLET);
+    expect(
+      await testRedis.zrange(`nonce-recycled:${CHAIN}:${WALLET}`, 0, -1),
+    ).toEqual([]);
+    expect(await testRedis.get(lastUsedNonceKey(CHAIN, WALLET))).toBe("2");
+    expect((await acquire(0)).nonce).toBe(3);
+  });
 });
