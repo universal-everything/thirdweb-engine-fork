@@ -45,8 +45,15 @@ vi.mock("thirdweb", async (importOriginal) => ({
   },
 }));
 
-const { acquireNonce, addSentNonce, lastUsedNonceKey, recycleNonceGaps } =
-  await import("../../src/shared/db/wallets/wallet-nonce");
+const {
+  ACQUIRED_NONCE_GRACE_MS,
+  acquiredNoncesKey,
+  acquireNonce,
+  addSentNonce,
+  lastUsedNonceKey,
+  recycleNonce,
+  recycleNonceGaps,
+} = await import("../../src/shared/db/wallets/wallet-nonce");
 const { isNonceTooHighError } = await import("../../src/shared/utils/error");
 const { _reconcileNonceAfterSendError } = await import(
   "../../src/worker/tasks/send-error-nonce"
@@ -171,5 +178,50 @@ describe("_reconcileNonceAfterSendError — the send worker's catch (DEV-16631)"
     });
     expect(await recycled()).toEqual(["2"]);
     expect(onchain.calls).toBe(0);
+  });
+});
+
+// Review finding (#1): "nonce too high" also fires when tx N+1 reaches the
+// node before tx N — normal with concurrent sends. N is then held by another
+// job (acquired, not yet sent), not missing; recycling it would hand it out
+// twice.
+describe("gap healing never recycles a nonce another job holds (DEV-16631)", () => {
+  const job = { log: vi.fn() };
+  const recycledSet = () =>
+    testRedis.zrange(`nonce-recycled:${CHAIN}:${WALLET}`, 0, -1);
+
+  it("out-of-order 'nonce too high' recycles only the failing job's own nonce", async () => {
+    onchain.count = 0;
+    // Three concurrent jobs hold 0, 1, 2; none sent yet.
+    await Promise.all([0, 1, 2].map(acquire));
+    // Job 2 hits the node first → "nonce too high".
+    await _reconcileNonceAfterSendError({
+      job,
+      error: new Error("nonce too high: address 0xa7d5…, tx: 2 state: 0"),
+      chainId: CHAIN,
+      from: WALLET,
+      nonce: 2,
+      queueId: "q2",
+    });
+    expect(await recycledSet()).toEqual(["2"]);
+  });
+
+  it("an acquired nonce abandoned past the grace period is recycled", async () => {
+    onchain.count = 0;
+    await Promise.all([0, 1].map(acquire));
+    const later = Date.now() + ACQUIRED_NONCE_GRACE_MS + 1_000;
+    expect((await recycleNonceGaps(CHAIN, WALLET, later)).recycled).toEqual([
+      0, 1,
+    ]);
+  });
+
+  it("sending or recycling a nonce clears its acquired mark", async () => {
+    onchain.count = 0;
+    await Promise.all([0, 1].map(acquire));
+    await addSentNonce(CHAIN, WALLET, 0);
+    await recycleNonce(CHAIN, WALLET, 1);
+    expect(
+      await testRedis.zrange(acquiredNoncesKey(CHAIN, WALLET), 0, -1),
+    ).toEqual([]);
   });
 });

@@ -85,6 +85,18 @@ export const recycledNoncesKey = (chainId: number, walletAddress: Address) =>
 export const sentNoncesKey = (chainId: number, walletAddress: Address) =>
   `nonce-sent:${chainId}:${normalizeAddress(walletAddress)}`;
 
+/**
+ * PATCH (DEV-16631): nonces handed out by `acquireNonce` but not yet sent or
+ * recycled, scored by acquire time (ms). `recycleNonceGaps` must not recycle
+ * these — another job is signing/sending them — unless they are older than
+ * `ACQUIRED_NONCE_GRACE_MS` (its worker died between acquire and send).
+ */
+export const acquiredNoncesKey = (chainId: number, walletAddress: Address) =>
+  `nonce-acquired:${chainId}:${normalizeAddress(walletAddress)}`;
+
+/** An acquired-but-unsent nonce older than this is treated as abandoned. */
+export const ACQUIRED_NONCE_GRACE_MS = 5 * 60 * 1000;
+
 export const splitSentNoncesKey = (key: string) => {
   const _splittedKeys = key.split(":");
   const walletAddress = normalizeAddress(_splittedKeys[2]);
@@ -102,6 +114,8 @@ export const addSentNonce = async (
 ) => {
   const key = sentNoncesKey(chainId, walletAddress);
   await redis.sadd(key, nonce.toString());
+  // PATCH (DEV-16631): sent ⇒ no longer merely acquired.
+  await redis.zrem(acquiredNoncesKey(chainId, walletAddress), nonce.toString());
 };
 
 /**
@@ -164,6 +178,13 @@ export const acquireNonce = async (args: {
     nonce = await redis.incr(key);
   }
 
+  // PATCH (DEV-16631): mark it held until it is sent or recycled.
+  await redis.zadd(
+    acquiredNoncesKey(chainId, walletAddress),
+    Date.now(),
+    nonce.toString(),
+  );
+
   await updateNonceMap({
     chainId,
     walletAddress,
@@ -196,6 +217,8 @@ export const recycleNonce = async (
 
   const key = recycledNoncesKey(chainId, walletAddress);
   await redis.zadd(key, nonce, nonce.toString());
+  // PATCH (DEV-16631): recycled ⇒ no longer held by its job.
+  await redis.zrem(acquiredNoncesKey(chainId, walletAddress), nonce.toString());
 };
 
 /**
@@ -235,8 +258,10 @@ export const initLatestNonceFromOnchainIfUnset = async (
 
 /**
  * PATCH (DEV-16631): recycle every nonce between the last one used onchain and
- * the last one issued here that is not in flight ("sent"), so the next
- * `acquireNonce` fills the gap. What the upstream `nonceResyncWorker` does —
+ * the last one issued here that nobody holds — not in flight ("sent") and not
+ * freshly acquired by a job that is still signing/sending it — so the next
+ * `acquireNonce` fills the gap. A nonce acquired more than
+ * `ACQUIRED_NONCE_GRACE_MS` ago without being sent counts as abandoned. What the upstream `nonceResyncWorker` does —
  * but that worker only visits wallets with an in-flight tx, and a wallet whose
  * sends all fail pre-broadcast ("nonce too high") has none, so it never healed.
  * Callable per wallet: the send worker runs it on "nonce too high".
@@ -244,6 +269,7 @@ export const initLatestNonceFromOnchainIfUnset = async (
 export const recycleNonceGaps = async (
   chainId: number,
   walletAddress: Address,
+  now: number = Date.now(),
 ): Promise<{
   lastUsedNonceOnchain: number;
   lastUsedNonceDb: number;
@@ -253,16 +279,21 @@ export const recycleNonceGaps = async (
     (await _onchainTransactionCount(chainId, walletAddress)) - 1;
   const lastUsedNonceDb = await inspectNonce(chainId, walletAddress);
 
+  const heldSince = now - ACQUIRED_NONCE_GRACE_MS;
+  const acquiredKey = acquiredNoncesKey(chainId, walletAddress);
   const recycled: number[] = [];
   for (
     let nonce = lastUsedNonceOnchain + 1;
     nonce <= lastUsedNonceDb;
     nonce++
   ) {
-    if (!(await isSentNonce(chainId, walletAddress, nonce))) {
-      await recycleNonce(chainId, walletAddress, nonce);
-      recycled.push(nonce);
-    }
+    if (await isSentNonce(chainId, walletAddress, nonce)) continue;
+    // "nonce too high" also fires when tx N+1 reaches the node before tx N —
+    // normal with concurrent sends. N is then acquired, not missing.
+    const acquiredAt = await redis.zscore(acquiredKey, nonce.toString());
+    if (acquiredAt !== null && Number(acquiredAt) > heldSince) continue;
+    await recycleNonce(chainId, walletAddress, nonce);
+    recycled.push(nonce);
   }
   return { lastUsedNonceOnchain, lastUsedNonceDb, recycled };
 };
@@ -330,6 +361,7 @@ export async function deleteNoncesForBackendWallets(
     lastUsedNonceKey(chainId, walletAddress),
     recycledNoncesKey(chainId, walletAddress),
     sentNoncesKey(chainId, walletAddress),
+    acquiredNoncesKey(chainId, walletAddress),
     nonceHistoryKey(chainId, walletAddress),
   ]);
   await redis.del(keys);
