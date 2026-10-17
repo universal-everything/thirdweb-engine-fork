@@ -246,3 +246,39 @@ describe("gap healing never recycles a nonce another job holds (DEV-16631)", () 
     ).not.toBeNull();
   });
 });
+
+// Prod 2026-10-17, after #1/#2 shipped: the heal logged "onchain=0 db=0
+// recycled=[]" and nonce 2 kept failing. The old engine had recycled 2 (so
+// recycled pops first) while the counter read 0 — scanning only up to the
+// counter found no gap.
+describe("gap healing when the handed-out nonce sits above the counter (DEV-16631)", () => {
+  const job = { log: vi.fn() };
+
+  it("prod state: counter 0, recycled {2}, chain at 1 → nonce 1 goes out next, then 2, then 3", async () => {
+    onchain.count = 1;
+    await testRedis.set(lastUsedNonceKey(CHAIN, WALLET), 0);
+    await recycleNonce(CHAIN, WALLET, 2);
+    // The retry loop: acquire pops 2, the RPC says too high.
+    const first = await acquire(0);
+    expect(first.nonce).toBe(2);
+    await _reconcileNonceAfterSendError({
+      job,
+      error: new Error("nonce too high: address 0xa7d5…, tx: 2 state: 1"),
+      chainId: CHAIN,
+      from: WALLET,
+      nonce: 2,
+      queueId: "q0",
+    });
+    expect((await acquire(1)).nonce).toBe(1);
+    expect((await acquire(2)).nonce).toBe(2);
+    // The counter was raised to what had been handed out: no re-issue of 1/2.
+    expect((await acquire(3)).nonce).toBe(3);
+  });
+
+  it("never lowers the counter", async () => {
+    onchain.count = 1;
+    await testRedis.set(lastUsedNonceKey(CHAIN, WALLET), 9);
+    await recycleNonceGaps(CHAIN, WALLET, Date.now(), 2);
+    expect(await testRedis.get(lastUsedNonceKey(CHAIN, WALLET))).toBe("9");
+  });
+});

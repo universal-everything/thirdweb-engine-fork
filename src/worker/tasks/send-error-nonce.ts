@@ -40,7 +40,7 @@ export const _reconcileNonceAfterSendError = async (args: {
     // Recycle the gap now so this job's retry (and every other queued send)
     // takes the missing nonce first, instead of failing forever.
     if (isNonceTooHighError(error)) {
-      const healed = await recycleNonceGaps(chainId, from);
+      const healed = await recycleNonceGaps(chainId, from, Date.now(), nonce);
       job.log(
         `Nonce gap: onchain=${healed.lastUsedNonceOnchain} db=${healed.lastUsedNonceDb} recycled=[${healed.recycled.join(",")}]`,
       );
