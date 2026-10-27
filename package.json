@@ -95,9 +95,9 @@
     "schema": "./src/prisma/schema.prisma"
   },
   "resolutions": {
-    "@thirdweb-dev/auth/**/axios": ">=1.7.8",
+    "@thirdweb-dev/auth/**/axios": "^1.20.0",
     "@thirdweb-dev/auth/**/web3-utils": ">=4.2.1",
-    "@grpc/grpc-js": ">=1.8.22",
+    "@grpc/grpc-js": "^1.14.5",
     "body-parser": ">=1.20.3",
     "cookie": ">=0.7.0",
     "elliptic": ">=6.6.0",
@@ -105,7 +105,7 @@
     "ox": "0.6.9",
     "secp256k1": ">=4.0.4",
     "viem": "2.22.17",
-    "ws": ">=8.17.1",
+    "ws": "^8.21.0",
     "cross-spawn": ">=7.0.6",
     "@google-cloud/kms": "4.5.0",
     "protobufjs": "7.6.6",

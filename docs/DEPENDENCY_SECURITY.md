@@ -11,8 +11,8 @@ Audit records deduplicated by advisory ID (not by repeated dependency path),
 
 | Scope | Before critical/high/moderate/low | After critical/high/moderate/low |
 | --- | --- | --- |
-| Production dependencies | 10 / 106 / 75 / 23 | 0 / 78 / 46 / 15 |
-| All dependencies | 18 / 134 / 101 / 27 | 0 / 81 / 48 / 15 |
+| Production dependencies | 10 / 106 / 75 / 23 | 0 / 14 / 13 / 7 |
+| All dependencies | 18 / 134 / 101 / 27 | 0 / 14 / 13 / 7 |
 
 **Not audit-clean.** Remaining records are retained and reported, not suppressed.
 The older Fastify/thirdweb/wallet stack includes advisories whose fixes require
@@ -41,6 +41,8 @@ Bull Board frontend bundles and the Node/OS image need separate scanning.
   CI build/lint/testing use Node 22 (prool already requires Node 22). This is a
   development-tool migration, not a production Node upgrade. The production
   Node 18 base is a separate, important runtime-maintenance follow-up.
+- Refresh compatible transitive lock entries (JWT, URI/glob parsers, crypto and
+  HTTP helpers), and raise stale scoped axios/grpc/ws resolution floors.
 - `prool`'s pinned tar 7.2.0 is resolved to patched 7.5.21; no major tar jump.
 
 ## Checks and rollout
@@ -76,7 +78,8 @@ Bull Board frontend bundles and the Node/OS image need separate scanning.
    audit-zero gate while known unresolved findings remain.
 
 `.github/dependabot.yml` monitors npm/Yarn at `/` and `/sdk` and GitHub Actions,
-weekly with bounded open PR counts. It does not cover the separate Bun e2e
+weekly with bounded open PR counts. Exact Yarn resolutions still need manual
+security review and patch maintenance; do not assume Dependabot updates them. It does not cover the separate Bun e2e
 lockfile; that is not part of the runtime image dependency audit. Security updates
 are event-driven, not limited to the weekly version-update schedule. See
 [GitHub version-update setup](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/configure-version-updates).
