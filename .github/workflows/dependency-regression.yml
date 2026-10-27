@@ -1,0 +1,38 @@
+name: Dependency regression
+
+on: pull_request
+
+permissions:
+  contents: read
+
+jobs:
+  offline-regression:
+    runs-on: ubuntu-24.04
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379/tcp
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4.2.0
+        with:
+          node-version: "22"
+          cache: yarn
+      - run: yarn install --frozen-lockfile
+      - name: KMS codec/signer and nonce regressions (no cloud credentials)
+        env:
+          REDIS_TEST_URL: redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}/15
+        run: >-
+          yarn vitest run
+          tests/unit/kms-dependency-compat.test.ts
+          tests/unit/guarded-chain-indexer-sweep.test.ts
+          tests/unit/wallet-nonce-gap.test.ts
+          tests/unit/nonce-health-check-cron.test.ts
+          tests/unit/math.test.ts
+          tests/unit/aws-arn.test.ts
